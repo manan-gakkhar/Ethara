@@ -1,11 +1,5 @@
 import mongoose from "mongoose";
 
-const MONGODB_URI = process.env.MONGODB_URI!;
-
-if (!MONGODB_URI) {
-  throw new Error("Please add MONGODB_URI to your .env file");
-}
-
 declare global {
   // eslint-disable-next-line no-var
   var _mongooseConn: typeof mongoose | undefined;
@@ -13,20 +7,17 @@ declare global {
   var _mongoosePromise: Promise<typeof mongoose> | undefined;
 }
 
-let cached = global._mongooseConn;
-let cachedPromise = global._mongoosePromise;
-
 export async function connectDB(): Promise<typeof mongoose> {
-  if (cached) return cached;
+  const uri = process.env.MONGODB_URI;
+  if (!uri) throw new Error("Please add MONGODB_URI to your environment variables");
 
-  if (!cachedPromise) {
-    cachedPromise = mongoose.connect(MONGODB_URI, {
-      bufferCommands: false,
-    });
+  // Return cached connection if available
+  if (global._mongooseConn) return global._mongooseConn;
+
+  if (!global._mongoosePromise) {
+    global._mongoosePromise = mongoose.connect(uri, { bufferCommands: false });
   }
 
-  cached = await cachedPromise;
-  global._mongooseConn = cached;
-  global._mongoosePromise = cachedPromise;
-  return cached;
+  global._mongooseConn = await global._mongoosePromise;
+  return global._mongooseConn;
 }

@@ -8,13 +8,12 @@ import User from "@/models/User";
 import bcrypt from "bcryptjs";
 
 export const authOptions: NextAuthOptions = {
-  // MongoDBAdapter handles sessions/accounts/verification tokens in MongoDB
   adapter: MongoDBAdapter(clientPromise) as any,
 
   providers: [
     GoogleProvider({
-      clientId: process.env.GOOGLE_CLIENT_ID!,
-      clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
+      clientId: process.env.GOOGLE_CLIENT_ID ?? "",
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET ?? "",
       allowDangerousEmailAccountLinking: true,
     }),
 
@@ -52,13 +51,11 @@ export const authOptions: NextAuthOptions = {
   ],
 
   callbacks: {
-    // Called after a successful sign-in — ensure Google users have a role in our User collection
     async signIn({ user, account }) {
       if (account?.provider === "google") {
         await connectDB();
         const existing = await User.findOne({ email: user.email });
         if (!existing) {
-          // First-time Google sign-in: create user with default MEMBER role
           await User.create({
             name: user.name,
             email: user.email,
@@ -70,15 +67,13 @@ export const authOptions: NextAuthOptions = {
       return true;
     },
 
-    async jwt({ token, user, trigger }) {
-      // On initial sign-in, user object is present
+    async jwt({ token, user }) {
       if (user) {
         token.id = user.id;
         token.role = (user as any).role ?? "MEMBER";
       }
 
-      // Fetch role from DB if not yet on token (e.g. Google sign-in first time)
-      if (!token.role || token.role === undefined) {
+      if (!token.role && token.email) {
         await connectDB();
         const dbUser = await User.findOne({ email: token.email }).lean();
         if (dbUser) {
