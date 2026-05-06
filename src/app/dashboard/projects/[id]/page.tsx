@@ -6,10 +6,19 @@ import { useParams, useRouter } from "next/navigation";
 import { Plus, ArrowLeft, Trash2 } from "lucide-react";
 import Link from "next/link";
 
+const COLUMNS = [
+  { key: "TODO",        label: "To Do",       dotColor: "#818cf8" },
+  { key: "IN_PROGRESS", label: "In Progress",  dotColor: "#fbbf24" },
+  { key: "DONE",        label: "Done",         dotColor: "#4ade80" },
+] as const;
+
+type Status = (typeof COLUMNS)[number]["key"];
+
 export default function ProjectDetails() {
   const { data: session } = useSession();
   const params = useParams();
   const router = useRouter();
+
   const [project, setProject] = useState<any>(null);
   const [users, setUsers] = useState<any[]>([]);
   const [showTaskModal, setShowTaskModal] = useState(false);
@@ -17,14 +26,12 @@ export default function ProjectDetails() {
   const [taskDesc, setTaskDesc] = useState("");
   const [taskAssignee, setTaskAssignee] = useState("");
   const [taskDueDate, setTaskDueDate] = useState("");
+  const [creating, setCreating] = useState(false);
 
   const fetchProject = async () => {
     const res = await fetch(`/api/projects/${params.id}`);
-    if (res.ok) {
-      setProject(await res.json());
-    } else {
-      router.push("/dashboard");
-    }
+    if (res.ok) setProject(await res.json());
+    else router.push("/dashboard");
   };
 
   const fetchUsers = async () => {
@@ -41,6 +48,7 @@ export default function ProjectDetails() {
 
   const handleCreateTask = async (e: React.FormEvent) => {
     e.preventDefault();
+    setCreating(true);
     const res = await fetch("/api/tasks", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -52,7 +60,7 @@ export default function ProjectDetails() {
         dueDate: taskDueDate || null,
       }),
     });
-
+    setCreating(false);
     if (res.ok) {
       setShowTaskModal(false);
       setTaskTitle("");
@@ -73,159 +81,246 @@ export default function ProjectDetails() {
   };
 
   const deleteTask = async (taskId: string) => {
-    if (confirm("Are you sure?")) {
-      await fetch(`/api/tasks/${taskId}`, { method: "DELETE" });
-      fetchProject();
-    }
+    if (!confirm("Delete this task?")) return;
+    await fetch(`/api/tasks/${taskId}`, { method: "DELETE" });
+    fetchProject();
   };
 
   const deleteProject = async () => {
-    if (confirm("Delete this project and all its tasks?")) {
-      await fetch(`/api/projects/${params.id}`, { method: "DELETE" });
-      router.push("/dashboard");
-    }
+    if (!confirm("Delete this project and all its tasks? This cannot be undone.")) return;
+    await fetch(`/api/projects/${params.id}`, { method: "DELETE" });
+    router.push("/dashboard");
   };
 
-  if (!project) return <div className="container">Loading...</div>;
+  if (!project) {
+    return <div className="loading-screen">Loading…</div>;
+  }
 
   const isAdmin = (session?.user as any)?.role === "ADMIN";
   const userId = (session?.user as any)?.id;
 
+  const tasksByStatus = (status: Status) =>
+    project.tasks.filter((t: any) => t.status === status);
+
   return (
     <div>
-      <Link href="/dashboard" style={{display: 'inline-flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1.5rem', color: 'var(--text-muted)'}}>
-        <ArrowLeft size={16} /> Back to Projects
+      <Link href="/dashboard" className="back-link">
+        <ArrowLeft size={14} />
+        Projects
       </Link>
-      
-      <div className="dashboard-header">
-        <div>
-          <h1 style={{marginBottom: '0.5rem'}}>{project.name}</h1>
-          <p className="card-desc">{project.description}</p>
-        </div>
-        <div style={{display: 'flex', gap: '1rem'}}>
+
+      <div className="project-header">
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "1rem" }}>
+          <div>
+            <h1>{project.name}</h1>
+            {project.description && (
+              <p className="card-desc" style={{ marginTop: "0.375rem", marginBottom: 0 }}>
+                {project.description}
+              </p>
+            )}
+          </div>
+
           {isAdmin && (
-            <>
-              <button className="btn btn-secondary" style={{width: 'auto', display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--danger)', borderColor: 'var(--danger)'}} onClick={deleteProject}>
-                <Trash2 size={16} /> Delete Project
+            <div className="dashboard-header-actions">
+              <button className="btn btn-danger btn-sm" onClick={deleteProject}>
+                <Trash2 size={14} />
+                Delete
               </button>
-              <button className="btn" style={{width: 'auto', display: 'flex', alignItems: 'center', gap: '0.5rem'}} onClick={() => setShowTaskModal(true)}>
-                <Plus size={16} /> New Task
+              <button className="btn btn-sm" onClick={() => setShowTaskModal(true)}>
+                <Plus size={14} />
+                New Task
               </button>
-            </>
+            </div>
           )}
         </div>
       </div>
 
-      <div style={{display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(350px, 1fr))', gap: '1.5rem'}}>
-        {project.tasks.map((task: any) => {
-          const isAssignee = task.assigneeId === userId;
-          const canEditStatus = isAdmin || isAssignee;
-
-          const isOverdue = task.dueDate && new Date(task.dueDate) < new Date() && task.status !== "DONE";
-
+      {/* Kanban board */}
+      <div className="kanban-board">
+        {COLUMNS.map((col) => {
+          const tasks = tasksByStatus(col.key);
           return (
-            <div key={task.id} className="card" style={{borderLeft: `4px solid ${task.status === 'TODO' ? '#3b82f6' : task.status === 'IN_PROGRESS' ? '#f59e0b' : '#10b981'}`}}>
-              <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start'}}>
-                <h3 className="card-title">
-                  {task.title}
-                  {isOverdue && <span style={{marginLeft: '0.5rem', fontSize: '0.75rem', background: 'var(--danger)', color: 'white', padding: '0.125rem 0.5rem', borderRadius: '9999px'}}>Overdue</span>}
-                </h3>
-                {isAdmin && (
-                  <button onClick={() => deleteTask(task.id)} style={{background: 'none', border: 'none', color: 'var(--danger)', cursor: 'pointer'}}>
-                    <Trash2 size={16} />
-                  </button>
+            <div key={col.key} className="kanban-column">
+              <div className="kanban-column-header">
+                <div className="kanban-column-title">
+                  <span className="kanban-dot" style={{ background: col.dotColor }} />
+                  {col.label}
+                </div>
+                <span className="kanban-count">{tasks.length}</span>
+              </div>
+
+              <div className="kanban-tasks">
+                {tasks.map((task: any) => {
+                  const isAssignee = task.assigneeId === userId;
+                  const canEdit = isAdmin || isAssignee;
+                  const isOverdue =
+                    task.dueDate &&
+                    new Date(task.dueDate) < new Date() &&
+                    task.status !== "DONE";
+
+                  return (
+                    <div key={task.id} className="task-card">
+                      <div className="task-card-header">
+                        <span className="task-card-title">
+                          {task.title}
+                          {isOverdue && (
+                            <span className="overdue-badge">Overdue</span>
+                          )}
+                        </span>
+                        {isAdmin && (
+                          <button
+                            className="btn-icon danger"
+                            onClick={() => deleteTask(task.id)}
+                            aria-label="Delete task"
+                            style={{ flexShrink: 0 }}
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        )}
+                      </div>
+
+                      {task.description && (
+                        <p className="task-card-desc">{task.description}</p>
+                      )}
+
+                      <div className="task-card-meta">
+                        <div className="task-card-meta-row">
+                          <span className="task-card-meta-label">Assignee</span>
+                          <span className="task-card-meta-value">
+                            {task.assignee?.name ?? "Unassigned"}
+                          </span>
+                        </div>
+                        {task.dueDate && (
+                          <div className="task-card-meta-row">
+                            <span className="task-card-meta-label">Due</span>
+                            <span
+                              className="task-card-meta-value"
+                              style={{ color: isOverdue ? "var(--danger)" : undefined }}
+                            >
+                              {new Date(task.dueDate).toLocaleDateString(undefined, {
+                                month: "short",
+                                day: "numeric",
+                                year: "numeric",
+                              })}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+
+                      {canEdit && (
+                        <select
+                          className="form-control task-status-select"
+                          value={task.status}
+                          onChange={(e) => updateTaskStatus(task.id, e.target.value)}
+                        >
+                          <option value="TODO">To Do</option>
+                          <option value="IN_PROGRESS">In Progress</option>
+                          <option value="DONE">Done</option>
+                        </select>
+                      )}
+                    </div>
+                  );
+                })}
+
+                {tasks.length === 0 && (
+                  <div
+                    style={{
+                      padding: "1.5rem 1rem",
+                      textAlign: "center",
+                      color: "var(--text-muted)",
+                      fontSize: "0.8125rem",
+                    }}
+                  >
+                    No tasks
+                  </div>
                 )}
               </div>
-              <p className="card-desc">{task.description}</p>
-              
-              <div style={{marginTop: '1rem', padding: '1rem', background: '#0f172a', borderRadius: '0.5rem'}}>
-                <div style={{display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem', fontSize: '0.875rem'}}>
-                  <span style={{color: 'var(--text-muted)'}}>Assignee:</span>
-                  <span>{task.assignee?.name || "Unassigned"}</span>
-                </div>
-                <div style={{display: 'flex', justifyContent: 'space-between', fontSize: '0.875rem'}}>
-                  <span style={{color: 'var(--text-muted)'}}>Due Date:</span>
-                  <span>{task.dueDate ? new Date(task.dueDate).toLocaleDateString() : "No due date"}</span>
-                </div>
-              </div>
-
-              {canEditStatus && (
-                <div style={{marginTop: '1rem', display: 'flex', justifyContent: 'flex-end'}}>
-                  <select 
-                    className="form-control" 
-                    style={{width: 'auto', padding: '0.5rem'}}
-                    value={task.status}
-                    onChange={(e) => updateTaskStatus(task.id, e.target.value)}
-                  >
-                    <option value="TODO">To Do</option>
-                    <option value="IN_PROGRESS">In Progress</option>
-                    <option value="DONE">Done</option>
-                  </select>
-                </div>
-              )}
-              {!canEditStatus && (
-                <div style={{marginTop: '1rem', display: 'flex', justifyContent: 'flex-end'}}>
-                  <span className={`badge ${task.status === 'TODO' ? 'badge-todo' : task.status === 'IN_PROGRESS' ? 'badge-progress' : 'badge-done'}`}>
-                    {task.status.replace("_", " ")}
-                  </span>
-                </div>
-              )}
             </div>
-          )
+          );
         })}
-        {project.tasks.length === 0 && (
-          <div style={{gridColumn: '1 / -1', textAlign: 'center', padding: '3rem', color: 'var(--text-muted)', background: 'var(--surface)', borderRadius: '1rem', border: '1px dashed var(--border)'}}>
-            No tasks yet. {isAdmin ? "Create a task and assign it to a team member." : ""}
-          </div>
-        )}
       </div>
 
+      {/* New Task Modal */}
       {showTaskModal && (
-        <div className="modal-backdrop">
+        <div
+          className="modal-backdrop"
+          onClick={(e) => e.target === e.currentTarget && setShowTaskModal(false)}
+        >
           <div className="modal">
-            <h2 style={{marginBottom: '1.5rem'}}>Create New Task</h2>
+            <div className="modal-header">
+              <h2 className="modal-title">New Task</h2>
+              <button
+                className="btn-icon"
+                onClick={() => setShowTaskModal(false)}
+                aria-label="Close"
+              >
+                ✕
+              </button>
+            </div>
+
             <form onSubmit={handleCreateTask}>
               <div className="form-group">
-                <label>Task Title</label>
-                <input 
-                  type="text" 
-                  className="form-control" 
+                <label htmlFor="task-title">Title</label>
+                <input
+                  id="task-title"
+                  type="text"
+                  className="form-control"
+                  placeholder="Task title"
                   value={taskTitle}
-                  onChange={e => setTaskTitle(e.target.value)}
-                  required 
+                  onChange={(e) => setTaskTitle(e.target.value)}
+                  required
+                  autoFocus
                 />
               </div>
               <div className="form-group">
-                <label>Description</label>
-                <textarea 
-                  className="form-control" 
+                <label htmlFor="task-desc">Description</label>
+                <textarea
+                  id="task-desc"
+                  className="form-control"
+                  placeholder="What needs to be done?"
                   value={taskDesc}
-                  onChange={e => setTaskDesc(e.target.value)}
+                  onChange={(e) => setTaskDesc(e.target.value)}
                   rows={3}
-                  required 
+                  required
                 />
               </div>
               <div className="form-group">
-                <label>Assign To</label>
-                <select className="form-control" value={taskAssignee} onChange={e => setTaskAssignee(e.target.value)}>
+                <label htmlFor="task-assignee">Assign To</label>
+                <select
+                  id="task-assignee"
+                  className="form-control"
+                  value={taskAssignee}
+                  onChange={(e) => setTaskAssignee(e.target.value)}
+                >
                   <option value="">Unassigned</option>
-                  {users.map(user => (
-                    <option key={user.id} value={user.id}>{user.name} ({user.email})</option>
+                  {users.map((user) => (
+                    <option key={user.id} value={user.id}>
+                      {user.name} ({user.email})
+                    </option>
                   ))}
                 </select>
               </div>
               <div className="form-group">
-                <label>Due Date</label>
-                <input 
-                  type="date" 
-                  className="form-control" 
+                <label htmlFor="task-due">Due Date</label>
+                <input
+                  id="task-due"
+                  type="date"
+                  className="form-control"
                   value={taskDueDate}
-                  onChange={e => setTaskDueDate(e.target.value)}
+                  onChange={(e) => setTaskDueDate(e.target.value)}
                 />
               </div>
-              <div style={{display: 'flex', gap: '1rem', marginTop: '2rem'}}>
-                <button type="button" className="btn btn-secondary" onClick={() => setShowTaskModal(false)}>Cancel</button>
-                <button type="submit" className="btn">Create Task</button>
+              <div className="modal-actions">
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => setShowTaskModal(false)}
+                >
+                  Cancel
+                </button>
+                <button type="submit" className="btn" disabled={creating}>
+                  {creating ? "Creating…" : "Create Task"}
+                </button>
               </div>
             </form>
           </div>

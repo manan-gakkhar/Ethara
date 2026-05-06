@@ -1,7 +1,10 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
+import { connectDB } from "@/lib/mongoose";
+import Project from "@/models/Project";
+import Task from "@/models/Task";
+import User from "@/models/User";
 
 export async function GET() {
   try {
@@ -10,16 +13,31 @@ export async function GET() {
       return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
     }
 
-    const projects = await prisma.project.findMany({
-      include: {
-        owner: { select: { id: true, name: true, email: true } },
-        _count: { select: { tasks: true } },
-      },
-      orderBy: { createdAt: "desc" },
-    });
+    await connectDB();
 
-    return NextResponse.json(projects);
+    const projects = await Project.find({})
+      .sort({ createdAt: -1 })
+      .lean();
+
+    // Attach owner info and task count
+    const result = await Promise.all(
+      projects.map(async (p) => {
+        const owner = await User.findById(p.ownerId, { name: 1, email: 1 }).lean();
+        const taskCount = await Task.countDocuments({ projectId: p._id });
+        return {
+          id: String(p._id),
+          name: p.name,
+          description: p.description,
+          createdAt: p.createdAt,
+          owner: { id: String(owner?._id), name: owner?.name, email: owner?.email },
+          _count: { tasks: taskCount },
+        };
+      })
+    );
+
+    return NextResponse.json(result);
   } catch (error) {
+    console.error("Error fetching projects:", error);
     return NextResponse.json({ message: "Internal error" }, { status: 500 });
   }
 }
@@ -32,21 +50,21 @@ export async function POST(req: Request) {
     }
 
     const { name, description } = await req.json();
-
     if (!name || !description) {
       return NextResponse.json({ message: "Missing fields" }, { status: 400 });
     }
 
-    const project = await prisma.project.create({
-      data: {
-        name,
-        description,
-        ownerId: (session.user as any).id,
-      },
+    await connectDB();
+
+    const project = await Project.create({
+      name,
+      description,
+      ownerId: (session.user as any).id,
     });
 
-    return NextResponse.json(project, { status: 201 });
+    return NextResponse.json({ id: String(project._id), name: project.name }, { status: 201 });
   } catch (error) {
+    console.error("Error creating project:", error);
     return NextResponse.json({ message: "Internal error" }, { status: 500 });
   }
 }
