@@ -1,14 +1,13 @@
 import { NextAuthOptions } from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
 import GoogleProvider from "next-auth/providers/google";
-import { MongoDBAdapter } from "@auth/mongodb-adapter";
-import clientPromise from "./mongodb";
 import { connectDB } from "./mongoose";
 import User from "@/models/User";
 import bcrypt from "bcryptjs";
 
 export const authOptions: NextAuthOptions = {
-  adapter: MongoDBAdapter(clientPromise) as any,
+  // No adapter — JWT strategy handles sessions entirely in the token.
+  // The adapter + jwt strategy combination causes NextAuth server config errors.
 
   providers: [
     GoogleProvider({
@@ -44,6 +43,7 @@ export const authOptions: NextAuthOptions = {
           id: String(user._id),
           email: user.email ?? "",
           name: user.name ?? "",
+          image: user.image ?? null,
           role: user.role,
         };
       },
@@ -51,29 +51,42 @@ export const authOptions: NextAuthOptions = {
   ],
 
   callbacks: {
+    // On Google sign-in: create the user in our User collection if first time
     async signIn({ user, account }) {
       if (account?.provider === "google") {
-        await connectDB();
-        const existing = await User.findOne({ email: user.email });
-        if (!existing) {
-          await User.create({
-            name: user.name,
-            email: user.email,
-            image: user.image,
-            role: "MEMBER",
-          });
+        try {
+          await connectDB();
+          const existing = await User.findOne({ email: user.email });
+          if (!existing) {
+            const created = await User.create({
+              name: user.name,
+              email: user.email,
+              image: user.image,
+              role: "MEMBER",
+            });
+            // Attach our DB id so the jwt callback picks it up
+            user.id = String(created._id);
+          } else {
+            user.id = String(existing._id);
+            (user as any).role = existing.role;
+          }
+        } catch (err) {
+          console.error("signIn callback error:", err);
+          return false;
         }
       }
       return true;
     },
 
-    async jwt({ token, user }) {
+    async jwt({ token, user, account }) {
+      // Initial sign-in: user object is present
       if (user) {
         token.id = user.id;
         token.role = (user as any).role ?? "MEMBER";
       }
 
-      if (!token.role && token.email) {
+      // For Google sign-in the role may not be on the user object yet — fetch from DB
+      if (account?.provider === "google" && !token.role) {
         await connectDB();
         const dbUser = await User.findOne({ email: token.email }).lean();
         if (dbUser) {
@@ -88,7 +101,7 @@ export const authOptions: NextAuthOptions = {
     async session({ session, token }) {
       if (token && session.user) {
         (session.user as any).id = token.id as string;
-        (session.user as any).role = token.role as string;
+        (session.user as any).role = (token.role as string) ?? "MEMBER";
       }
       return session;
     },
@@ -98,5 +111,6 @@ export const authOptions: NextAuthOptions = {
 
   pages: {
     signIn: "/login",
+    error: "/login",
   },
 };
